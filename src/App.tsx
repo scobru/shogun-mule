@@ -31,6 +31,7 @@ function App() {
         networkService.connect()
         catalogService.subscribeToNetwork()
         catalogService.announceAsPeer()
+        catalogService.verifyAndCleanupRegistry()
         peerDiscoveryService.startDiscovery()
         peerDiscoveryService.announceSelf()
       }
@@ -48,6 +49,7 @@ function App() {
     networkService.connect()
     catalogService.subscribeToNetwork()
     catalogService.announceAsPeer()
+    catalogService.verifyAndCleanupRegistry()
     peerDiscoveryService.startDiscovery()
     peerDiscoveryService.announceSelf()
   }

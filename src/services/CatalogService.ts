@@ -152,6 +152,42 @@ class CatalogService {
     return Array.from(this.localCatalog.values())
   }
 
+  // Verify and cleanup registry (remove orphaned torrents)
+  verifyAndCleanupRegistry(): void {
+    const gun = authService.getGun()
+    const user = authService.getCurrentUser()
+    
+    if (!gun || !user) return
+
+    console.log('Starting registry verification and cleanup...')
+
+    // Scan global registry for torrents shared by this user
+    gun.get(GUN_PATHS.TORRENTS).map().once((data: any, infoHash: string) => {
+      if (data && data.magnetURI) {
+        // Check if shared by current user
+        if (data.sharedBy === user.pub) {
+          // Check if it exists in local catalog
+          if (!this.localCatalog.has(infoHash)) {
+            console.warn(`Found orphaned torrent in registry: ${data.name} (${infoHash})`)
+            console.log(`Removing orphaned torrent from registry...`)
+            
+            // Remove from global network
+            gun.get(GUN_PATHS.TORRENTS).get(infoHash).put(null)
+            
+            // Remove from user's catalog
+            gun.user().get('catalog').get(infoHash).put(null)
+            
+            // Remove from search index (cleanup keywords)
+            const keywords = (data.name || '').toLowerCase().split(/[\s._-]+/).filter((k: string) => k.length >= 3)
+            keywords.forEach((keyword: string) => {
+              gun.get(GUN_PATHS.SEARCH).get(keyword).get(infoHash).put(null)
+            })
+          }
+        }
+      }
+    })
+  }
+
   // Announce this client as a peer
   announceAsPeer(): void {
     const gun = authService.getGun()
