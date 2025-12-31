@@ -25,14 +25,22 @@ async function loadWebTorrent() {
   return WebTorrent
 }
 
+// Map to track which torrents were seeded with their original file paths
+const seededTorrentPaths = new Map<string, string[]>()
+
 async function saveState() {
   if (!torrentClient) return
-  const torrents = torrentClient.torrents.map((t: any) => ({
-    infoHash: t.infoHash,
-    magnetURI: t.magnetURI,
-    path: t.path,
-    paused: pausedTorrents.has(t.infoHash)
-  }))
+  const torrents = torrentClient.torrents.map((t: any) => {
+    const seedPaths = seededTorrentPaths.get(t.infoHash)
+    return {
+      infoHash: t.infoHash,
+      magnetURI: t.magnetURI,
+      path: t.path,
+      paused: pausedTorrents.has(t.infoHash),
+      isSeeded: !!seedPaths,
+      seedFilePaths: seedPaths || null
+    }
+  })
   try {
     const state = {
       torrents,
@@ -40,6 +48,7 @@ async function saveState() {
       downloadPath
     }
     await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2))
+    console.log(`[Main] State saved: ${torrents.length} torrents (${torrents.filter((t: any) => t.isSeeded).length} seeded)`)
   } catch (err) {
     console.error('Failed to save torrent state:', err)
   }
@@ -64,12 +73,35 @@ async function loadState() {
     
     for (const t of torrents) {
       if (!torrentClient.get(t.infoHash)) {
-        const torrent = torrentClient.add(t.magnetURI, { path: t.path })
-        if (t.paused) {
-          pausedTorrents.add(t.infoHash)
-          torrent.on('ready', () => {
-             torrent.deselect(0, torrent.pieces.length - 1, 0)
-          })
+        try {
+          if (t.isSeeded && t.seedFilePaths && t.seedFilePaths.length > 0) {
+            // Re-seed the original files
+            console.log(`[Main] Re-seeding torrent: ${t.infoHash} from files:`, t.seedFilePaths)
+            torrentClient.seed(t.seedFilePaths, (torrent: any) => {
+              if (torrent) {
+                seededTorrentPaths.set(torrent.infoHash, t.seedFilePaths)
+                console.log(`[Main] Re-seeded: ${torrent.name} (${torrent.infoHash})`)
+                if (t.paused) {
+                  pausedTorrents.add(torrent.infoHash)
+                  if (torrent.pieces) {
+                    torrent.deselect(0, torrent.pieces.length - 1, 0)
+                  }
+                }
+              }
+            })
+          } else {
+            // Add as a download
+            console.log(`[Main] Re-adding torrent: ${t.infoHash}`)
+            const torrent = torrentClient.add(t.magnetURI, { path: t.path })
+            if (t.paused) {
+              pausedTorrents.add(t.infoHash)
+              torrent.on('ready', () => {
+                 torrent.deselect(0, torrent.pieces.length - 1, 0)
+              })
+            }
+          }
+        } catch (err) {
+          console.error(`[Main] Failed to restore torrent ${t.infoHash}:`, err)
         }
       }
     }
@@ -275,9 +307,13 @@ ipcMain.handle('torrent:add', async (_event, magnetURI: string, downloadPath?: s
 
 ipcMain.handle('torrent:create', async (_event, filePaths: string[]) => {
   if (!torrentClient) throw new Error('Torrent client not initialized')
+  console.log(`[IPC] Creating torrent from files:`, filePaths)
   
   return new Promise((resolve) => {
     torrentClient.seed(filePaths, (torrent: any) => {
+      // Store the original file paths so we can re-seed on restart
+      seededTorrentPaths.set(torrent.infoHash, filePaths)
+      console.log(`[IPC] Torrent created: ${torrent.name} (${torrent.infoHash})`)
       saveState()
       resolve(serializeTorrent(torrent))
     })
@@ -309,6 +345,9 @@ ipcMain.handle('torrent:resume', (_event, infoHash: string) => {
 ipcMain.handle('torrent:remove', async (_event, infoHash: string, deleteFiles: boolean = false) => {
   if (!torrentClient) return
 
+  // Clean up seeded torrents map
+  seededTorrentPaths.delete(infoHash)
+  
   // Don't wait for cleanup, just trigger it and return
   torrentClient.remove(infoHash, { destroyStore: deleteFiles }, (err: any) => {
       if (err) console.error('Error removing torrent:', err)
@@ -342,6 +381,8 @@ async function scanAndSeed(folderPath: string) {
       if (!existing) {
         console.log(`[Main] Seeding file: ${file}`)
         torrentClient.seed(file, (torrent: any) => {
+          // Track the seeded file path for persistence
+          seededTorrentPaths.set(torrent.infoHash, [file])
           console.log(`[Main] Seeded ${file}: ${torrent.infoHash}`)
           saveState()
         })
