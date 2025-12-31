@@ -174,6 +174,9 @@ class TorrentService {
 
   // Remove a torrent
   async removeTorrent(infoHash: string, deleteFiles: boolean = false): Promise<void> {
+    // Remove from GunDB global registry first
+    catalogService.unpublishTorrent(infoHash)
+    
     await window.electronAPI?.torrent?.remove(infoHash, deleteFiles)
     this.catalog.delete(infoHash)
   }
