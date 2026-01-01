@@ -167,6 +167,20 @@ async function initTorrentClient() {
 }
 
 function serializeTorrent(torrent: any) {
+  // For seeded torrents, use the original file path from seededTorrentPaths
+  const seedPaths = seededTorrentPaths.get(torrent.infoHash)
+  let torrentPath: string | null = null
+  
+  if (seedPaths && seedPaths.length > 0) {
+    // Use the first file's directory for seeded torrents
+    torrentPath = seedPaths[0]
+  } else if (torrent.path && torrent.name) {
+    // For downloaded torrents, construct the path
+    torrentPath = path.join(torrent.path, torrent.name)
+  } else if (torrent.path) {
+    torrentPath = torrent.path
+  }
+
   return {
     infoHash: torrent.infoHash,
     magnetURI: torrent.magnetURI,
@@ -180,7 +194,7 @@ function serializeTorrent(torrent: any) {
     uploaded: torrent.uploaded,
     paused: pausedTorrents.has(torrent.infoHash),
     done: torrent.done,
-    path: torrent.path ? (torrent.name ? path.join(torrent.path, torrent.name) : torrent.path) : null,
+    path: torrentPath,
     files: torrent.files?.map((f: any) => ({
       name: f.name,
       path: f.path,
