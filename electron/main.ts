@@ -27,21 +27,30 @@ async function loadWebTorrent() {
 
 // Map to track which torrents were seeded with their original file paths
 const seededTorrentPaths = new Map<string, string[]>()
+// Map to track original magnet URIs for better restoration
+const magnetRegistry = new Map<string, string>()
+let isSaving = false
 
 async function saveState() {
-  if (!torrentClient) return
-  const torrents = torrentClient.torrents.map((t: any) => {
-    const seedPaths = seededTorrentPaths.get(t.infoHash)
-    return {
-      infoHash: t.infoHash,
-      magnetURI: t.magnetURI,
-      path: t.path,
-      paused: pausedTorrents.has(t.infoHash),
-      isSeeded: !!seedPaths,
-      seedFilePaths: seedPaths || null
-    }
-  })
+  if (!torrentClient || isSaving) return
+  isSaving = true
+
   try {
+    const torrents = torrentClient.torrents.map((t: any) => {
+      const seedPaths = seededTorrentPaths.get(t.infoHash)
+      // Prefer original magnet from registry, fallback to client's
+      const magnetURI = magnetRegistry.get(t.infoHash) || t.magnetURI
+      
+      return {
+        infoHash: t.infoHash,
+        magnetURI: magnetURI,
+        path: t.path,
+        paused: pausedTorrents.has(t.infoHash),
+        isSeeded: !!seedPaths,
+        seedFilePaths: seedPaths || null
+      }
+    })
+
     const state = {
       torrents,
       sharedFolder,
@@ -51,6 +60,8 @@ async function saveState() {
     console.log(`[Main] State saved: ${torrents.length} torrents (${torrents.filter((t: any) => t.isSeeded).length} seeded)`)
   } catch (err) {
     console.error('Failed to save torrent state:', err)
+  } finally {
+    isSaving = false
   }
 }
 
@@ -72,6 +83,11 @@ async function loadState() {
     console.log(`Loading ${torrents.length} torrents from state...`)
     
     for (const t of torrents) {
+      // Restore magnet registry
+      if (t.magnetURI) {
+        magnetRegistry.set(t.infoHash, t.magnetURI)
+      }
+
       if (!torrentClient.get(t.infoHash)) {
         try {
           if (t.isSeeded && t.seedFilePaths && t.seedFilePaths.length > 0) {
@@ -221,11 +237,25 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let isQuitting = false
+
+app.on('before-quit', (e) => {
+  if (isQuitting) return
+
+  e.preventDefault()
+  isQuitting = true
+  
   if (torrentClient) {
-    saveState().then(() => {
-        torrentClient.destroy()
+    console.log('[Main] Saving state before quit...')
+    saveState().finally(() => {
+      console.log('[Main] State saved, destroying client...')
+      torrentClient.destroy(() => {
+        console.log('[Main] Client destroyed, quitting...')
+        app.quit()
+      })
     })
+  } else {
+    app.quit()
   }
 })
 
@@ -295,6 +325,11 @@ ipcMain.handle('torrent:add', async (_event, magnetURI: string, downloadPath?: s
   const opts = downloadPath ? { path: downloadPath } : {}
   console.log(`[IPC] calling torrentClient.add with magnet: ${magnetURI}`)
   const torrent = torrentClient.add(magnetURI, opts)
+  
+  // Store original magnet URI immediately
+  if (torrent.infoHash) {
+    magnetRegistry.set(torrent.infoHash, magnetURI)
+  }
   
   console.log(`[IPC] Torrent object returned type:`, typeof torrent)
   console.log(`[IPC] Torrent object keys:`, Object.keys(torrent || {}))
