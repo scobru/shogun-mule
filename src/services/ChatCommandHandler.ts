@@ -62,6 +62,23 @@ class ChatCommandHandler {
       }
     })
 
+    // /reindex
+    this.register({
+      name: 'reindex',
+      description: 'Force re-index of local torrents to global registry',
+      usage: '/reindex',
+      execute: async () => {
+        try {
+          const { torrentService } = await import('./TorrentService') // Dynamic import to avoid cycles
+          const result = await torrentService.reindex()
+          return `✅ **Re-index Complete**\n` +
+                 `Published: ${result.published} torrents`
+        } catch (err) {
+          return `❌ Re-index failed: ${(err as Error).message}`
+        }
+      }
+    })
+
     // /search <query>
     this.register({
       name: 'search',

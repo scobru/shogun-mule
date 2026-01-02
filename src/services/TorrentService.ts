@@ -205,6 +205,20 @@ class TorrentService {
   getCatalog(): CatalogEntry[] {
     return Array.from(this.catalog.values())
   }
+  // Re-index all torrents to global registry
+  async reindex(): Promise<{ published: number, removed: number }> {
+    const torrents = await this.getTorrents()
+    const entries = torrents.map(t => ({
+      infoHash: t.infoHash,
+      name: t.name,
+      magnetURI: t.magnetURI,
+      size: t.length,
+      files: t.files.length,
+      sharedBy: '', // Filled by CatalogService
+      sharedAt: Date.now()
+    }))
+    return await catalogService.reindexAll(entries)
+  }
 }
 
 // Singleton instance

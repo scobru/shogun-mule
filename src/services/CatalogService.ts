@@ -203,6 +203,31 @@ class CatalogService {
       type: 'mule'
     })
   }
+  // Re-publish all local torrents to network
+  async reindexAll(torrents: NetworkTorrentEntry[]): Promise<{ published: number, removed: number }> {
+    const gun = authService.getGun()
+    if (!gun) return { published: 0, removed: 0 }
+
+    console.log(`Re-indexing ${torrents.length} torrents...`)
+    let published = 0
+
+    // Republish each torrent
+    for (const torrent of torrents) {
+      this.publishTorrent({
+        infoHash: torrent.infoHash,
+        name: torrent.name,
+        magnetURI: torrent.magnetURI,
+        size: torrent.size,
+        files: torrent.files
+      })
+      published++
+    }
+    
+    // Cleanup any orphans (optional, but good for consistency)
+    // this.verifyAndCleanupRegistry() 
+
+    return { published, removed: 0 }
+  }
 }
 
 // Singleton instance
