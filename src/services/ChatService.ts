@@ -2,7 +2,7 @@
 // Uses unified GUN_PATHS for consistency with relay
 
 import { authService } from './AuthService'
-import { GUN_PATHS } from '../config/constants'
+import { GUN_PATHS, getGunNode } from '../config/constants'
 
 export interface ChatMessage {
   id: string
@@ -53,7 +53,7 @@ class ChatService {
     this.lobbyListeners.add(onMessage)
 
     if (!this.lobbySubscribed) {
-      gun.get(GUN_PATHS.LOBBY).map().on((data: any, msgId: string) => {
+      getGunNode(gun, GUN_PATHS.LOBBY).map().on((data: any, msgId: string) => {
         if (!data || !data.text) return
 
         const msg: LobbyMessage = {
@@ -96,7 +96,7 @@ class ChatService {
 
     const msgId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
-    gun.get(GUN_PATHS.LOBBY).get(msgId).put({
+    getGunNode(gun, GUN_PATHS.LOBBY).get(msgId).put({
       from: user.pub,
       alias: user.alias,
       text,
@@ -141,7 +141,7 @@ class ChatService {
         encrypted: true
       }
 
-      gun.get(GUN_PATHS.CHATS).get(chatId).get(messageId).put({
+      getGunNode(gun, GUN_PATHS.CHATS).get(chatId).get(messageId).put({
         from: message.from,
         fromAlias: message.fromAlias,
         to: message.to,
@@ -175,7 +175,7 @@ class ChatService {
     this.messageListeners.get(chatId)!.add(onMessage)
 
     if (!this.subscriptions.has(chatId)) {
-      gun.get(GUN_PATHS.CHATS).get(chatId).map().on(async (data: any, messageId: string) => {
+      getGunNode(gun, GUN_PATHS.CHATS).get(chatId).map().on(async (data: any, messageId: string) => {
         if (!data || !data.content) return
 
         try {

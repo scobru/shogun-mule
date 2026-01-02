@@ -2,7 +2,7 @@
 // Uses unified shogun/network/* paths
 
 import { authService } from './AuthService'
-import { DEFAULT_RELAY_PEERS, GUN_PATHS } from '../config/constants'
+import { DEFAULT_RELAY_PEERS, GUN_PATHS, getGunNode } from '../config/constants'
 
 export interface RelayInfo {
   pubKey: string
@@ -57,7 +57,7 @@ class PeerDiscoveryService {
 
   // Subscribe to shogun/network/relays
   private subscribeToRelays(gun: any): void {
-    gun.get(GUN_PATHS.RELAYS).map().on((data: any, pubKey: string) => {
+    getGunNode(gun, GUN_PATHS.RELAYS).map().on((data: any, pubKey: string) => {
       if (!data) return
       
       const endpoint = data.endpoint || data.publicUrl || data.host
@@ -85,7 +85,7 @@ class PeerDiscoveryService {
 
   // Subscribe to shogun/network/peers (Mule clients)
   private subscribeToPeers(gun: any): void {
-    gun.get(GUN_PATHS.PEERS).map().on((data: any, pubKey: string) => {
+    getGunNode(gun, GUN_PATHS.PEERS).map().on((data: any, pubKey: string) => {
       if (!data || !data.alias) return
 
       const peer: RelayInfo = {
@@ -122,7 +122,7 @@ class PeerDiscoveryService {
 
     if (!gun || !user) return
 
-    gun.get(GUN_PATHS.PEERS).get(user.pub).put({
+    getGunNode(gun, GUN_PATHS.PEERS).get(user.pub).put({
       alias: user.alias,
       lastSeen: Date.now(),
       type: 'mule'

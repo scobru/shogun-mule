@@ -2,7 +2,7 @@
 // Uses the same paths as shogun-relay for network compatibility
 
 import { authService } from './AuthService'
-import { GUN_PATHS } from '../config/constants'
+import { GUN_PATHS, getGunNode } from '../config/constants'
 
 export interface NetworkTorrentEntry {
   infoHash: string
@@ -51,7 +51,7 @@ class CatalogService {
     this.localCatalog.set(torrent.infoHash, entry)
 
     // Publish to global network path (same as relay uses)
-    gun.get(GUN_PATHS.TORRENTS).get(torrent.infoHash).put({
+    getGunNode(gun, GUN_PATHS.TORRENTS).get(torrent.infoHash).put({
       name: entry.name,
       magnetURI: entry.magnetURI,
       size: entry.size,
@@ -64,7 +64,7 @@ class CatalogService {
     // Index by keywords for search
     const keywords = entry.name.toLowerCase().split(/[\s._-]+/).filter(k => k.length >= 3)
     keywords.forEach(keyword => {
-      gun.get(GUN_PATHS.SEARCH).get(keyword).get(torrent.infoHash).put(true)
+      getGunNode(gun, GUN_PATHS.SEARCH).get(keyword).get(torrent.infoHash).put(true)
     })
 
     // Also save to user's personal catalog
@@ -88,7 +88,7 @@ class CatalogService {
     this.localCatalog.delete(infoHash)
 
     // Remove from global network (set to null)
-    gun.get(GUN_PATHS.TORRENTS).get(infoHash).put(null)
+    getGunNode(gun, GUN_PATHS.TORRENTS).get(infoHash).put(null)
     
     // Remove from user's catalog
     gun.user().get('catalog').get(infoHash).put(null)
@@ -104,7 +104,7 @@ class CatalogService {
     if (!gun) return
 
     // Subscribe to all torrents in the network
-    gun.get(GUN_PATHS.TORRENTS).map().on((data: any, infoHash: string) => {
+    getGunNode(gun, GUN_PATHS.TORRENTS).map().on((data: any, infoHash: string) => {
       if (data && data.magnetURI && data.name) {
         const entry: NetworkTorrentEntry = {
           infoHash,
@@ -162,7 +162,7 @@ class CatalogService {
     console.log('Starting registry verification and cleanup...')
 
     // Scan global registry for torrents shared by this user
-    gun.get(GUN_PATHS.TORRENTS).map().once((data: any, infoHash: string) => {
+    getGunNode(gun, GUN_PATHS.TORRENTS).map().once((data: any, infoHash: string) => {
       if (data && data.magnetURI) {
         // Check if shared by current user
         if (data.sharedBy === user.pub) {
@@ -172,7 +172,7 @@ class CatalogService {
             console.log(`Removing orphaned torrent from registry...`)
             
             // Remove from global network
-            gun.get(GUN_PATHS.TORRENTS).get(infoHash).put(null)
+            getGunNode(gun, GUN_PATHS.TORRENTS).get(infoHash).put(null)
             
             // Remove from user's catalog
             gun.user().get('catalog').get(infoHash).put(null)
@@ -180,7 +180,7 @@ class CatalogService {
             // Remove from search index (cleanup keywords)
             const keywords = (data.name || '').toLowerCase().split(/[\s._-]+/).filter((k: string) => k.length >= 3)
             keywords.forEach((keyword: string) => {
-              gun.get(GUN_PATHS.SEARCH).get(keyword).get(infoHash).put(null)
+              getGunNode(gun, GUN_PATHS.SEARCH).get(keyword).get(infoHash).put(null)
             })
           }
         }
@@ -196,7 +196,7 @@ class CatalogService {
     if (!gun || !user) return
 
     // Announce in the unified peers path
-    gun.get(GUN_PATHS.PEERS).get(user.pub).put({
+    getGunNode(gun, GUN_PATHS.PEERS).get(user.pub).put({
       alias: user.alias,
       lastSeen: Date.now(),
       torrentsCount: this.localCatalog.size,

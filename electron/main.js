@@ -22,50 +22,79 @@ async function loadWebTorrent() {
 }
 // Map to track which torrents were seeded with their original file paths
 const seededTorrentPaths = new Map();
+// Map to track original magnet URIs for better restoration
+const magnetRegistry = new Map();
+let isSaving = false;
 async function saveState() {
-    if (!torrentClient)
+    if (!torrentClient || isSaving)
         return;
-    const torrents = torrentClient.torrents.map((t) => {
-        const seedPaths = seededTorrentPaths.get(t.infoHash);
-        return {
-            infoHash: t.infoHash,
-            magnetURI: t.magnetURI,
-            path: t.path,
-            paused: pausedTorrents.has(t.infoHash),
-            isSeeded: !!seedPaths,
-            seedFilePaths: seedPaths || null
-        };
-    });
+    isSaving = true;
     try {
+        const torrents = torrentClient.torrents
+            .filter((t) => {
+            if (!t.infoHash) {
+                console.warn('[Main] Skipping save for torrent with missing infoHash');
+                return false;
+            }
+            return true;
+        })
+            .map((t) => {
+            const seedPaths = seededTorrentPaths.get(t.infoHash);
+            // Prefer original magnet from registry, fallback to client's
+            const magnetURI = magnetRegistry.get(t.infoHash) || t.magnetURI;
+            return {
+                infoHash: t.infoHash,
+                magnetURI: magnetURI,
+                path: t.path,
+                paused: pausedTorrents.has(t.infoHash),
+                isSeeded: !!seedPaths,
+                seedFilePaths: seedPaths || null
+            };
+        });
         const state = {
             torrents,
             sharedFolder,
             downloadPath
         };
+        console.log(`[Main] Saving state to ${STATE_FILE}`);
+        console.log(`[Main] State content summary: ${JSON.stringify({ ...state, torrents: torrents.map((t) => ({ infoHash: t.infoHash, hasMagnet: !!t.magnetURI })) })}`);
         await fs.writeFile(STATE_FILE, JSON.stringify(state, null, 2));
-        console.log(`[Main] State saved: ${torrents.length} torrents (${torrents.filter((t) => t.isSeeded).length} seeded)`);
+        console.log(`[Main] State saved successfully.`);
     }
     catch (err) {
         console.error('Failed to save torrent state:', err);
     }
+    finally {
+        isSaving = false;
+    }
 }
 async function loadState() {
     try {
+        console.log(`[Main] Loading state from ${STATE_FILE}`);
         const data = await fs.readFile(STATE_FILE, 'utf8');
+        console.log(`[Main] State file content length: ${data.length}`);
         const state = JSON.parse(data);
         let torrents = [];
         if (Array.isArray(state)) {
-            // Legacy format
             torrents = state;
+            console.log('[Main] Loaded legacy state format (array)');
         }
         else {
             torrents = state.torrents || [];
             sharedFolder = state.sharedFolder || null;
             downloadPath = state.downloadPath || app.getPath('downloads');
+            console.log(`[Main] Loaded state: ${torrents.length} torrents, sharedFolder: ${sharedFolder}, downloadPath: ${downloadPath}`);
         }
         console.log(`Loading ${torrents.length} torrents from state...`);
         for (const t of torrents) {
-            if (!torrentClient.get(t.infoHash)) {
+            // Restore magnet registry
+            if (t.magnetURI) {
+                magnetRegistry.set(t.infoHash, t.magnetURI);
+            }
+            else {
+                console.warn(`[Main] Warning: Torrent ${t.infoHash} has no magnetURI in state!`);
+            }
+            if (t.infoHash && !torrentClient.get(t.infoHash)) {
                 try {
                     if (t.isSeeded && t.seedFilePaths && t.seedFilePaths.length > 0) {
                         // Re-seed the original files
@@ -86,6 +115,15 @@ async function loadState() {
                     else {
                         // Add as a download
                         console.log(`[Main] Re-adding torrent: ${t.infoHash}`);
+                        if (!t.magnetURI) {
+                            console.error(`[Main] Cannot re-add torrent ${t.infoHash}: Missing magnetURI`);
+                            continue;
+                        }
+                        // Add validation for magnetURI format
+                        if (!t.magnetURI.startsWith('magnet:?')) {
+                            console.error(`[Main] Invalid magnet URI for ${t.infoHash}: ${t.magnetURI}`);
+                            continue;
+                        }
                         const torrent = torrentClient.add(t.magnetURI, { path: t.path });
                         if (t.paused) {
                             pausedTorrents.add(t.infoHash);
@@ -99,6 +137,9 @@ async function loadState() {
                     console.error(`[Main] Failed to restore torrent ${t.infoHash}:`, err);
                 }
             }
+            else {
+                console.log(`[Main] Torrent ${t.infoHash} already exists in client (skipped restoration)`);
+            }
         }
         if (sharedFolder) {
             console.log(`[Main] Resuming shared folder: ${sharedFolder}`);
@@ -108,6 +149,9 @@ async function loadState() {
     catch (err) {
         if (err.code !== 'ENOENT') {
             console.error('Failed to load torrent state:', err);
+        }
+        else {
+            console.log('[Main] No previous state file found.');
         }
     }
 }
@@ -202,11 +246,24 @@ app.on('window-all-closed', () => {
         app.quit();
     }
 });
-app.on('before-quit', () => {
+let isQuitting = false;
+app.on('before-quit', (e) => {
+    if (isQuitting)
+        return;
+    e.preventDefault();
+    isQuitting = true;
     if (torrentClient) {
-        saveState().then(() => {
-            torrentClient.destroy();
+        console.log('[Main] Saving state before quit...');
+        saveState().finally(() => {
+            console.log('[Main] State saved, destroying client...');
+            torrentClient.destroy(() => {
+                console.log('[Main] Client destroyed, quitting...');
+                app.quit();
+            });
         });
+    }
+    else {
+        app.quit();
     }
 });
 // ============ IPC Handlers ============
@@ -232,8 +289,17 @@ ipcMain.handle('torrent:get-share-path', () => sharedFolder);
 ipcMain.handle('torrent:get-all', () => {
     if (!torrentClient)
         return [];
-    const torrents = torrentClient.torrents.map(serializeTorrent);
-    console.log(`[IPC] Sending ${torrents.length} torrents to renderer`);
+    const torrents = torrentClient.torrents.map((t) => {
+        try {
+            return serializeTorrent(t);
+        }
+        catch (e) {
+            console.error('[IPC] Serialization error for torrent:', t.infoHash, e);
+            return null;
+        }
+    }).filter((t) => t !== null);
+    console.log(`[IPC] Sending ${torrents.length} torrents to renderer. InfoHashes: ${torrents.map((t) => t.infoHash).join(', ')}`);
+    // console.log('[IPC] Full payload sample:', JSON.stringify(torrents[0]))
     return torrents;
 });
 ipcMain.handle('torrent:get-status', () => {
@@ -271,15 +337,27 @@ ipcMain.handle('torrent:add', async (_event, magnetURI, downloadPath) => {
     const opts = downloadPath ? { path: downloadPath } : {};
     console.log(`[IPC] calling torrentClient.add with magnet: ${magnetURI}`);
     const torrent = torrentClient.add(magnetURI, opts);
+    // Store original magnet URI immediately
+    if (torrent.infoHash) {
+        magnetRegistry.set(torrent.infoHash, magnetURI);
+    }
     console.log(`[IPC] Torrent object returned type:`, typeof torrent);
     console.log(`[IPC] Torrent object keys:`, Object.keys(torrent || {}));
     console.log(`[IPC] Torrent infoHash:`, torrent?.infoHash);
     console.log(`[IPC] Torrent magnetURI:`, torrent?.magnetURI);
-    // Save state immediately (store the magnet)
-    saveState();
+    // Save state immediately only if we have a valid infoHash
+    if (torrent.infoHash) {
+        saveState();
+    }
+    else {
+        console.log('[IPC] Torrent added but missing infoHash, waiting for metadata to save state...');
+    }
     // Update state when metadata is ready (name, files etc)
     torrent.on('ready', () => {
         console.log('[IPC] Torrent metadata ready:', torrent.name);
+        if (torrent.infoHash) {
+            magnetRegistry.set(torrent.infoHash, magnetURI);
+        }
         saveState();
         // Optional: could send an event to renderer here to update UI
     });

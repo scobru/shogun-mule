@@ -1,5 +1,5 @@
 import { authService } from './AuthService'
-import { GUN_PATHS, DEFAULT_RELAY_PEERS } from '../config/constants'
+import { GUN_PATHS, DEFAULT_RELAY_PEERS, getGunNode } from '../config/constants'
 
 export interface NetworkTorrent {
   infoHash: string
@@ -34,7 +34,7 @@ class NetworkService {
     const gun = authService.getGun()
 
     // Subscribe to relay announcements
-    gun.get(GUN_PATHS.RELAYS).map().on((data: any, key: string) => {
+    getGunNode(gun, GUN_PATHS.RELAYS).map().on((data: any, key: string) => {
       if (data && data.url) {
         this.relays.set(key, {
           url: data.url,
@@ -46,7 +46,7 @@ class NetworkService {
     })
 
     // Subscribe to network torrents
-    gun.get(GUN_PATHS.TORRENTS).map().on((data: any, infoHash: string) => {
+    getGunNode(gun, GUN_PATHS.TORRENTS).map().on((data: any, infoHash: string) => {
       if (data && data.magnetURI) {
         this.networkTorrents.set(infoHash, {
           infoHash,
